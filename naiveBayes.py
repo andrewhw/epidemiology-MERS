@@ -1,6 +1,7 @@
 #!/usr/bin/env python2
 
-# Authors: Mariah Martin Shein, Kassy Raymond and Andrew Hamilton-Wright
+# Authors: Mariah Martin Shein (original author)
+#       Modifications by Kassy Raymond and Andrew Hamilton-Wright
 #
 # Description:
 #   Naive Bayes Classifier
