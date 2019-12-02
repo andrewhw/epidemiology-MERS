@@ -1,0 +1,267 @@
+#!/usr/bin/env python
+
+# Authors: Kassy Raymond and Andrew Hamilton-Wright
+#
+# Description:
+#   Calculates a confusion matrix based on "True" and "Assigned"
+#   labels presented in a file.
+#
+# $Id$
+
+import sys
+import string
+
+##
+def quotestrip(label):
+    if len(label) > 1:
+        if label[0] == label[len(label)-1]:
+            if label[0] == '"' or label[0] == "'":
+                label = label[1:len(label)-1]
+    return label
+
+
+##
+def countMatches(db, ifile):
+
+    trueColumn = -1
+    assignedColumn = -1
+    nColumns = -1
+    fullLabelList = []
+    trueLabelList = []
+
+    line = ifile.readline()
+
+    if len(line) == 0:
+        sys.stderr.write("No data in file\n")
+        sys.exit(-1)
+
+    ## parse the header
+    tokenList = line.split(",")
+    nColumns = len(tokenList)
+    for i in range(0, nColumns):
+        tokenList[i] = tokenList[i].strip()
+        if tokenList[i] == "True":
+            trueColumn = i
+        elif tokenList[i] == "Assigned":
+            assignedColumn = i
+        elif tokenList[i] == "Label":
+            assignedColumn = i
+
+    if trueColumn < 0 or assignedColumn < 0:
+        sys.stderr.write(\
+                "Confusion file needs columns: %s and %s\n"
+                % ("True", "Assigned"))
+        sys.exit(-1)
+
+
+    ## now process the data
+    lineNo = 2
+    line = ifile.readline()
+    while len(line) != 0:
+
+        lineNo =  lineNo + 1
+        tokenList = line.split(",")
+        if len(tokenList) != nColumns:
+            sys.stderr.write(\
+                    "Header has %d columns, but line %d has %d\n"
+                    % (nColumns, lineNo, len(tokenList)))
+            sys.exit(-1)
+
+        trueLabel = quotestrip(tokenList[trueColumn].strip())
+        assignedLabel = quotestrip(tokenList[assignedColumn].strip())
+        fullKey = "%s -> %s" % (trueLabel, assignedLabel)
+
+        if trueLabel not in trueLabelList:
+            trueLabelList.append(trueLabel)
+
+        if trueLabel not in fullLabelList:
+            fullLabelList.append(trueLabel)
+        if assignedLabel not in fullLabelList:
+            fullLabelList.append(assignedLabel)
+
+
+        curCount = db.get(fullKey, 0)
+        curCount = curCount + 1
+        db[fullKey] = curCount
+
+        #print "line : ", line
+        #print "fullKey : ", fullKey
+        #print "count : ", curCount
+        #print ""
+
+        line = ifile.readline()
+
+    ## make sure all combinations are there
+    for trueLabel in trueLabelList:
+        for assignedLabel in fullLabelList:
+            fullKey = "%s -> %s" % (trueLabel, assignedLabel)
+            curCount = db.get(fullKey, 0)
+            db[fullKey] = curCount
+
+    return db
+
+
+##
+def outputConfusion(ofile, db, fieldDelimiter):
+
+    assignToMaxLen = 0
+    assignToList = []
+    assignToLen = []
+    assignToColumnTotal = []
+
+    ## min length must take care of "Totals"
+    totalWidth = len("Totals")
+    assignFromMaxLen = totalWidth
+    assignFromList = []
+
+
+    keyPairList = db.keys()
+    keyPairList.sort()
+
+    for keyPair in keyPairList:
+        keyTokenList = keyPair.split(" -> ")
+        if keyTokenList[0] not in assignFromList:
+            assignFromList.append(keyTokenList[0])
+
+        if keyTokenList[1] not in assignToList:
+            assignToList.append(keyTokenList[1])
+            assignToColumnTotal.append(0)
+
+    assignFromList.sort()
+    assignToList.sort()
+
+    for i in range(0, len(assignFromList)):
+        if assignFromMaxLen < len(assignFromList[i]):
+            assignFromMaxLen = len(assignFromList[i])
+
+    for i in range(0, len(assignToList)):
+        assignToLen.append(len(assignToList[i]))
+        if assignToLen[i] < 7:
+            assignToLen[i] = 7
+        if assignToMaxLen < assignToLen[i]:
+            assignToMaxLen = assignToLen[i]
+
+
+    ofile.write("%*s" % (assignFromMaxLen, "/-->"))
+
+
+    for i in range(0, len(assignToList)):
+        ofile.write("%s%*s" %
+                (fieldDelimiter, assignToLen[i], assignToList[i]))
+    ofile.write(" :%s%*s" % (fieldDelimiter, totalWidth, "Totals"))
+    ofile.write("%s%s" % (fieldDelimiter, "Fraction"))
+    ofile.write("\n")
+
+
+    totalCorrectCount = 0
+    totalCount = 0
+    classFraction = 1.0
+    for i in range(0, len(assignFromList)):
+        rowCount = 0
+        correctCount = 0
+        ofile.write("%*s" % (assignFromMaxLen, assignFromList[i]))
+        for j in range(0, len(assignToList)):
+            key = "%s -> %s" % (assignFromList[i], assignToList[j])
+            count = db.get(key, 0)
+            rowCount = rowCount + count
+            assignToColumnTotal[j] = assignToColumnTotal[j] + count
+
+            ## if we are labelling correctly, set correct count
+            if assignFromList[i] == assignToList[j]:
+                correctCount = count
+
+            ofile.write("%s%*d" %
+                    (fieldDelimiter, assignToLen[j], count))
+
+        totalCorrectCount = totalCorrectCount + correctCount
+        totalCount = totalCount + rowCount
+        rowFraction = float(correctCount) / float(rowCount)
+        classFraction = classFraction \
+                    * rowFraction
+
+        ofile.write(" :%s%*d" %
+                    (fieldDelimiter, totalWidth, rowCount))
+        ofile.write("%s%f" %
+                    (fieldDelimiter, rowFraction))
+        ofile.write("\n")
+
+    ## now the row of totals along the bottom
+    ofile.write("%*s" % (assignFromMaxLen, "Totals"))
+    for i in range(0, len(assignToList)):
+        ofile.write("%s%*d" %
+                    (fieldDelimiter, assignToLen[i],
+                        assignToColumnTotal[i]))
+
+    ofile.write(" :%s%*s" %
+                    (fieldDelimiter, totalWidth, ""))
+    ofile.write("%s%f" %
+                    (fieldDelimiter, classFraction))
+    ofile.write("\n")
+
+
+    ## calculate accuracy
+    ofile.write("Accuracy: %d / %d = %g\n" %
+            (totalCorrectCount, totalCount,
+                    (float(totalCorrectCount) / float(totalCount))))
+
+
+
+##
+def printHelp(progname):
+
+    sepIndex = string.rfind(progname, "/")
+    if sepIndex < 0:
+        printProgname = progname
+    else:
+        printProgname = progname[sepIndex + 1:]
+
+    print printProgname, \
+                    "[ <options> ] <confusion file>"
+    print ""
+    print "Confusion file must have two columns, 'True' and 'Assigned'"
+    print ""
+
+
+
+
+##
+## ----------------------------------------------------------------
+## Beginning of mainline
+##
+
+db = {}
+filecount = 0
+
+## process arguments
+for arg in sys.argv[1:]:
+    if arg[0] == '-':
+        if arg[1] == 'h' or arg[1] == 'H':
+            printHelp(sys.argv[0])
+            sys.exit(1)
+
+        else:
+            print "Unknown argument '", arg, "' -- aborting"
+            printHelp(sys.argv[0])
+            sys.exit(1)
+
+
+    else:
+        try:
+            ifile = open(arg, "r")
+        except IOError, (errno, strerror):
+            sys.stderr.write(\
+                "Failure opening input file '%s'\n" % arg)
+            sys.stderr.write(\
+                "    I/O error(%s) : %s\n" % (errno, strerror))
+            sys.stderr.write("\n")
+            printHelp(sys.argv[0])
+            sys.exit(1)
+
+        db = countMatches(db, ifile)
+        ifile.close()
+        outputConfusion(sys.stdout, db, " ")
+        filecount = filecount + 1
+
+
+if filecount == 0:
+    printHelp(sys.argv[0])

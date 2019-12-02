@@ -1,0 +1,286 @@
+#!/usr/bin/env python
+
+# Authors: Kassy Raymond and Andrew Hamilton-Wright
+#
+# Description:
+#   Pull out the given columns from a comma/tab/space delimited file
+#
+# $Id$
+
+import sys
+import math
+import random
+import string
+
+##
+def processDataLines(ofile, ifile,
+            columnList, userSpecifiedDelimiter, doLogMapping):
+
+    columnIndex = []
+    logMapping = []
+
+    inputLine = ifile.readline()
+    if len(inputLine) == 0:
+        sys.stderr.write("No data\n")
+        return -1
+
+    foundDelimiter = 0
+    for d in [ ",", ";", " ", "\t", ":" ]:
+        lineSplitDelimiter = d
+        inputLine = inputLine.lstrip()
+        lineTokenSet = inputLine.split(lineSplitDelimiter)
+        #print "lineTokenSet : ", lineTokenSet
+        if len(lineTokenSet) > 1:
+            foundDelimiter = 1
+            break
+
+    if foundDelimiter == 0:
+        sys.stderr.write("Cannot split [%s] - aborting\n" % inputLine)
+        sys.exit(1)
+
+
+    ## for each column specified, see if it is in the data file
+    ## checking for log mappings as we go
+    for searchColumnName in columnList:
+        # look for this column under its given name
+        foundColumn = 0
+        logMapping.append(0)
+        searchIndex = len(logMapping) - 1
+        for dataIndex in range(0, len(lineTokenSet)):
+            dataColumnName = lineTokenSet[dataIndex].strip()
+            if dataColumnName == searchColumnName:
+                columnIndex.append(dataIndex)
+                foundColumn = 1
+                break
+
+        # if we didn't find it, try with Log* in front
+        if doLogMapping:
+            if foundColumn == 0:
+                ## first figure out whether we have a log type request
+                if searchColumnName.startswith("Log"):
+                    searchColumnTrim = searchColumnName[3:]
+                    baseLength = 0
+                    logBase = math.e
+                    while searchColumnTrim[baseLength].isdigit():
+                        baseLength = baseLength + 1
+                    if baseLength > 0:
+                        logBase = int(searchColumnTrim[:baseLength])
+                        searchColumnTrim = searchColumnTrim[baseLength:]
+                    logMapping[searchIndex] = logBase
+
+                elif searchColumnName.startswith("Ln"):
+                    searchColumnTrim = searchColumnName[2:]
+                    logMapping[searchIndex] = math.e
+
+                ## if there was a sensible log component,
+                ## look for the name again
+                if logMapping[searchIndex] > 0:
+                    for dataIndex in range(0, len(lineTokenSet)):
+                        dataColumnName = lineTokenSet[dataIndex].strip()
+                        if dataColumnName == searchColumnTrim:
+                            columnIndex.append(dataIndex)
+                            foundColumn = 1
+                            break
+
+        if foundColumn == 0:
+            sys.stderr.write("Column '%s' not found\n" %
+                    searchColumnName)
+            sys.exit(-1);
+
+
+    ## print out header line
+    outputDelimiter = ""
+    for name in columnList:
+        ofile.write("%s%s" % (outputDelimiter, name))
+        if outputDelimiter == "":
+            outputDelimiter = setDelimiter(
+                        userSpecifiedDelimiter,
+                        lineSplitDelimiter)
+    ofile.write("\n")
+
+
+    ## now fill in the data from the rest of the file
+    inputLine = ifile.readline()
+    while len(inputLine) != 0:
+        outputDelimiter = ""
+        lineTokenSet = inputLine.split(lineSplitDelimiter)
+        for i in range(0, len(columnIndex)):
+            #sys.stdout.write("i: %s" % i)
+            #print "lineTokenSet   : ", lineTokenSet
+            #print "columnIndex[i] : ", columnIndex[i]
+            #print "            i  : ", i
+            dataToken = lineTokenSet[columnIndex[i]].strip()
+            if logMapping[i] > 0:
+                try:
+                    dataFloat = float(dataToken)
+                except ValueError:
+                    sys.stderr("Cannot convert '%s' for log\n" %
+                            dataToken)
+                    sys.exit(-1)
+
+                if dataFloat < 0:
+                    dataAbs = abs(dataFloat)
+                    dataSign = -1
+                else:
+                    dataSign = 1
+                    dataAbs = dataFloat
+
+                ## very ugly; we seem not to be able to detect
+                ## infinities directly, so all we can do here
+                ## is sub in the value we failed to take the
+                ## log of (Yuck!); note protection above to
+                ## attempt to do a semi-sensible thing when
+                ## values are < 0
+                try:
+                    logValue = math.log(dataAbs, logMapping[i])
+                    ofile.write("%s%f" %
+                            (outputDelimiter, logValue * dataSign))
+                except OverflowError:
+                    ofile.write("%s%f" % (outputDelimiter, dataFloat))
+
+
+            else:
+                ofile.write("%s%s" % (outputDelimiter, dataToken))
+
+            if outputDelimiter == "":
+                outputDelimiter = setDelimiter(
+                        userSpecifiedDelimiter,
+                        lineSplitDelimiter)
+
+        ofile.write("\n")
+        inputLine = ifile.readline()
+
+    return 1
+
+
+##
+def setDelimiter(userSpecifiedDelimiter, lineSplitDelimiter):
+    if userSpecifiedDelimiter == "":
+        if lineSplitDelimiter != " ":
+            outputDelimiter = "%s " % lineSplitDelimiter
+        else:
+            outputDelimiter = " "
+    else:
+        outputDelimiter = userSpecifiedDelimiter
+
+    return outputDelimiter
+
+
+##
+def printHelp(progname):
+
+    sepIndex = string.rfind(progname, "/")
+    if sepIndex < 0:
+        printProgname = progname
+    else:
+        printProgname = progname[sepIndex + 1:]
+
+    print printProgname, " [ options ] [ <file> ]"
+    print ""
+    print "Options:"
+    print ""
+    print "-o<FILE>  : Place output in <FILE>"
+    print "-v        : Be more verbose"
+    print "-L<LIST>  : List of columns to print"
+    print ""
+    print "Compares the files for differences, and prints out the results"
+    print "as counts"
+
+
+
+##
+## ----------------------------------------------------------------
+## Beginning of mainline
+##
+
+def main(argv):
+    outputDelim = ""
+    pendingOutputFile = 0
+    ofile = sys.stdout
+    ifile = sys.stdin
+    ifileName = ""
+    columnList = []
+    logmapping = 0
+
+
+    ## process arguments
+    for arg in argv[1:]:
+        if arg[0] == '-':
+            if arg[1] == 'o':
+                if arg[2:] == "":
+                    pendingOutputFile = 1
+                else:
+                    try:
+                        ofile = open(arg[2:], "w")
+                    except IOError, (errno, strerror):
+                        sys.stderr.write(
+                                "Failure opening output file '%s'\n" %
+                                arg[2:])
+                        sys.stderr.write(
+                                "    I/O error(%s) : %s\n" %
+                                (errno, strerror))
+                        sys.stderr.write("\n")
+                        printHelp(argv[0])
+                        sys.exit(1)
+
+            elif arg[1] == 'L':
+                columnList = arg[2:].split(',')
+
+            elif arg[1] == 'l':
+                logmapping = 1
+
+            elif arg[1] == 'd':
+                outputDelim = arg[2:]
+
+            else:
+                sys.stderr.write(
+                        "Unknown argument '%s' -- aborting\n" % arg)
+                printHelp(argv[0])
+                sys.exit(1)
+
+        else:
+            if pendingOutputFile:
+                pendingOutputFile = 0
+                try:
+                    ofile = open(arg, "w")
+                except IOError, (errno, strerror):
+                    sys.stderr.write(
+                            "Failure opening output file '%s'\n" % arg)
+                    sys.stderr.write("    I/O error(%s) : %s\n" %
+                            (errno, strerror))
+                    sys.stderr.write("\n")
+                    printHelp(argv[0])
+                    sys.exit(1)
+
+            else:
+                ifileName = arg
+                try:
+                    ifile = open(arg, "r")
+                except IOError, (errno, strerror):
+                    sys.stderr.write(
+                            "Failure opening input file '%s'\n" % arg)
+                    sys.stderr.write("    I/O error(%s) : %s\n" %
+                                    (errno, strerror))
+                    sys.stderr.write("\n")
+                    printHelp(argv[0])
+                    sys.exit(1)
+
+    if len(columnList) == 0:
+        sys.stderr.write("No list of column specified\n")
+        printHelp(argv[0])
+        sys.exit(1)
+
+
+    if processDataLines(ofile, ifile, columnList,
+                outputDelim, logmapping) < 1:
+        sys.stderr.write("Processing failed!\n")
+        printHelp(argv[0])
+        sys.exit(1)
+
+##
+## ----------------------------------------------------------------
+## This causes the main() function to be called if run from
+## the command line; otherwise we can be loaded as an
+## importable module
+if __name__ == "__main__": main(sys.argv)
+

@@ -1,0 +1,88 @@
+#!/bin/sh
+
+# Authors: Kassy Raymond and Andrew Hamilton-Wright
+#
+# Description:
+#   Calculate confusion matrices for all experiments in the
+#   named directories
+#
+# $Id$
+
+TMP="/tmp/confusion.$$"
+
+#trap "echo 'cleanup' ; rm -f ${TMP}* ; exit 1" 2 3 15
+
+for dir in "$@"
+do 
+    echo ""
+    echo "DIR : ${dir}"
+    ## create list of all intended labels
+    > ${TMP}
+    for labelfile in ${dir}/*_testlabels.txt
+    do
+        extractColumns -LLabel ${labelfile} | tail +2 >> ${TMP}
+    done
+    sort -u ${TMP} > ${TMP}.labelList
+    LABELLIST=`cat ${TMP}.labelList`
+
+
+    echo "Label list:"
+    sed -e 's/^/    /' ${TMP}.labelList
+    echo ""
+
+
+    ## create list of all experiment types
+    (
+        cd ${dir}
+        ls -1 *labelled.txt \
+                | sed -e 's/^[0-9]*_//' -e 's/-labelled.txt//' \
+                | sort -u > ${TMP}.experiments
+
+        ## see if we can delete "-noFilter"
+        nExperiments=`wc ${TMP}.experiments | awk '{print $1;}'`
+        nExperimentsNoFilter=`grep noFilter ${TMP}.experiments | wc \
+                | awk '{print $1;}'`
+        if [ ${nExperiments} -eq ${nExperimentsNoFilter} ]
+        then
+            sed -e 's/-noFilter$//' ${TMP}.experiments > ${TMP}.tmp
+            mv ${TMP}.tmp ${TMP}.experiments
+        fi
+
+        for experiment in `cat ${TMP}.experiments`
+        do
+            echo "Experiment: ${experiment}"
+            echo "Assigned" > ${TMP}.assignedLabels
+            echo "True" > ${TMP}.trueLabels
+            for file in [0-9]*_${experiment}*-labelled.txt
+            do
+                if [ -s ${file} ]
+                then
+                    id=`echo ${file} | sed -e 's/_.*//'`
+                    if [ -f ${id}_testlabels.txt ]
+                    then
+                        extractColumns -LLabel ${file} \
+                                | tail +2 \
+                                | sed -e 's/^"//' -e 's/"$//' \
+                                >> ${TMP}.assignedLabels
+                        extractColumns -LLabel ${id}_testlabels.txt \
+                                | tail +2 \
+                                | sed -e 's/^"//' -e 's/"$//' \
+                                >> ${TMP}.trueLabels
+                    else
+                        echo "Error: ${id}_testlabels.txt not found" >&2
+                    fi
+                else
+                    echo "    no data in: ${file}" >&2
+                fi
+            done
+            appendColumns -d, ${TMP}.trueLabels ${TMP}.assignedLabels \
+                    > ${TMP}.confusionData
+            confuse ${TMP}.confusionData \
+                    > ${experiment}-confusion.csv
+        done
+    )
+
+    echo ""
+done
+
+#rm -f ${TMP}*
